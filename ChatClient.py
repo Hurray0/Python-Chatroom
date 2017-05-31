@@ -10,30 +10,10 @@ import threading
 import ctypes
 import inspect
 import sys
+import struct
+
 reload(sys)
 sys.setdefaultencoding('utf8')
-
-global HOST
-global PORT
-global BUFSIZ
-global ADDR
-
-def _async_raise(tid, exctype):
-    """raises the exception, performs cleanup if needed"""
-    tid = ctypes.c_long(tid)
-    if not inspect.isclass(exctype):
-        exctype = type(exctype)
-    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(exctype))
-    if res == 0:
-        raise ValueError("invalid thread id")
-    elif res != 1:
-        # """if it returns a number greater than one, you're in trouble,
-        # and you should call it again with exc=NULL to revert the effect"""
-        ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
-        raise SystemError("PyThreadState_SetAsyncExc failed")
-
-def stop_thread(thread):
-    _async_raise(thread.ident, SystemExit)
 
 class Client():
     def __init__(self):
@@ -59,7 +39,7 @@ class Client():
         errTk.geometry('200x120')
         errTk.title("Error!")
         Label(errTk, text = info).pack(padx = 5, pady = 20, fill = 'x')
-        Button(errTk, text = "确定", command = errTk.destroy).pack()
+        bt = Button(errTk, text = "确定", command = errTk.destroy).pack()
         errTk.mainloop()
 
     class Login():
@@ -95,9 +75,9 @@ class Client():
                 else:
                     # login failed
                     if recv_data["info"]:
-                        father.showErr(recv_data["info"])
+                        self.father.showErr(recv_data["info"])
                     else:
-                        father.showErr("未知登录错误")
+                        self.father.showErr("未知登录错误")
                         #self.disConnect()
 
         def window(self):
@@ -112,6 +92,7 @@ class Client():
                             pady = 15, fill = 'x')
             entry = Entry(frame)
             entry.pack(padx = 10, fill = 'x')
+            entry.bind("<Key-Return>", lambda x : self.goLogin(entry, tk))
             button = Button(frame, text = "登录",
                     command = lambda : self.goLogin(entry, tk))
             button.pack()
@@ -127,14 +108,8 @@ class Client():
         def __init__(self, father):
             self.father = father
             self.socket = father.tcpCliSock # may raise a Exception
-
-        def network_test_first(self):
-            data = {"type": "ping"}
-            jData = json.dumps(data)
-            self.socket.send(jData)
-            recv = self.socket.recv(BUFSIZ)
-            jRecv = json.loads(recv)
-            return jRecv["type"] == "pong"
+            self.rSocket = None
+            self.sSocket = None
 
         class ListenThread(threading.Thread):
             """Socket监听线程，对收到的信息作出相应反馈"""
@@ -144,33 +119,26 @@ class Client():
                 self.socket = socket
 
             def run(self):
-                self.alive = True
-                while self.alive:
-                    jData = self.socket.recv(BUFSIZ)
+                while True:
+                    try:
+                        jData = self.socket.recv(BUFSIZ)
+                        data = json.loads(jData)
+                    except:
+                        break
                     print "__receive__" + jData
-                    data = json.loads(jData)
                     switch = {
                             "list": self.list,
                             "singleChat": self.chat,
                             "groupChat": self.chat,
                             "pong": self.pong
                             }
-                    #try:
                     switch[data['type']](data)
-                    #except Exception as e:
-                        #print e
-                        #print "收到未知type数据包"
                 print "结束监听"
-
-            def stop(self):
-                self.alive = False
-                print "关闭监听"
-                stop_thread(self)
 
             def list(self, data):
                 """刷新列表"""
                 listbox = self.father.listbox
-                list = ['Global', 'Broad']
+                list = ['群聊', '组播']
                 list += data['list']
                 listbox.delete(0, END) # 清空现有列表
                 for l in list:
@@ -188,6 +156,32 @@ class Client():
                 text = '[Server]pong\n'
                 textArea.insert(END, text)
 
+        class BroadListenThread(threading.Thread):
+            """组播侦听线程"""
+            def __init__(self, father):
+                threading.Thread.__init__(self)
+                self.father = father
+
+            def run(self):
+                print '开始监听组播'
+                self.alive = True
+                sock = self.father.rSocket
+                while self.alive:
+                    try:
+                        jData, addr = sock.recvfrom(BUFSIZ)
+                        data = json.loads(jData)
+                    except Exception as e:
+                        pass
+                    else:
+                        textArea = self.father.textArea
+                        text = "[组播]" + data['from'] + ': ' + data['msg'] + '\n'
+                        textArea.insert(END, text)
+                        print "__receiveBroad__" + jData
+                print '组播监听循环结束'
+
+            def stop(self):
+                self.alive = False
+
         class Window():
             def __init__(self, father):
                 self.father = father
@@ -198,22 +192,107 @@ class Client():
                 jData = json.dumps(data)
                 socket.send(jData)
 
+            def changeAddr(self):
+                def setAddr(entry1, entry2, entry3, self, tk):
+                    if self.father.rSocket:
+                        # 停止之前的地址
+                        self.father.broadListenThread.stop()
+                        self.father.sSocket.sendto("", (MYGROUP, MYPORT)) # fake send
+                        print '停止之前的地址'
+
+                    try:
+                        # 发送socket
+                        global MYGROUP
+                        MYGROUP = entry1.get()
+                        global MYPORT
+                        MYPORT = int(entry2.get())
+                        global SENDERPORT
+                        SENDERPORT = int(entry3.get())
+                        s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+                        s.bind((HOST, SENDERPORT))
+                        ttl_bin = struct.pack('@i', MYTTL)
+                        s.setsockopt(IPPROTO_IP, IP_MULTICAST_TTL, ttl_bin)
+                        status = s.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP,
+                                inet_aton(MYGROUP) +
+                                inet_aton(HOST))#加入到组播组
+                        self.father.sSocket = s
+
+                        # 监听socket
+                        so = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+                        so.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+                        so.bind((HOST, MYPORT))
+                        status = so.setsockopt(IPPROTO_IP,
+                                IP_ADD_MEMBERSHIP,
+                                inet_aton(MYGROUP) +
+                                inet_aton(HOST))
+                        so.setblocking(0)
+                        self.father.rSocket = so
+
+                    except Exception as e:
+                        print e
+                        self.father.father.showErr("该地址不可使用")
+                    else:
+                        broadListenThread = self.father.BroadListenThread( \
+                                self.father)
+                        broadListenThread.start()
+                        self.father.broadListenThread = broadListenThread
+                        tk.destroy()
+
+                """修改组播地址"""
+                tk = Tk()
+                tk.geometry('300x150')
+                tk.title('修改组播地址')
+                Label(tk, text = "组播地址: ").grid(row = 0, column = 0)
+                Label(tk, text = "监听端口: ").grid(row = 1, column = 0)
+                Label(tk, text = "本地端口: ").grid(row = 2, column = 0)
+                entry1 = Entry(tk)
+                entry1.grid(row = 0, column = 1)
+                entry2 = Entry(tk)
+                entry2.grid(row = 1, column = 1)
+                entry3 = Entry(tk)
+                entry3.grid(row = 2, column = 1)
+                bt = Button(tk, text = "确定",
+                        command = lambda : setAddr(entry1, entry2, entry3,
+                            self, tk)).grid(row = 3, column = 1)
+
+                tk.mainloop()
+
+            def sendBroad(self, msg, et_input, username):
+                sSocket = self.father.sSocket
+                if not sSocket:
+                    self.changeAddr()
+                else:
+                    data = {'type': 'broadChat', 'msg': msg, 'from': username}
+                    jData = json.dumps(data)
+                    print (MYGROUP, MYPORT)
+                    sSocket.sendto(jData, (MYGROUP, MYPORT))
+                    print '__sendBroad__' + jData
+
+                    # 清空输入框
+                    et_input.delete(0, END)
+
             def send(self, socket, lb_toName, et_input):
                 """点击发送按钮"""
                 text = et_input.get()
                 toName = lb_toName['text']
                 username = self.father.father.username
                 print toName
-                if toName == 'Global':
+                if toName == '群聊':
                     data = {'type': 'groupChat', 'msg': text, 'from': username}
-                elif toName == 'Broad':
-                    pass
+                elif toName == '组播':
+                    self.sendBroad(text, et_input, username)
+                    return
                 else:
                     # 私聊
                     data = {'type': 'singleChat', 'msg': text,
                             'to': toName, 'from': username}
+                    textArea = self.father.textArea
+                    t = "[->" + toName + ']' + text + '\n'
+                    textArea.insert(END, t)
                 jData = json.dumps(data)
                 socket.send(jData)
+                print '__send__' + jData
+                et_input.delete(0, END)
 
             def changeSendTo(self, listbox, lb_toName):
                 """双击选择列表"""
@@ -238,24 +317,32 @@ class Client():
                         #state = DISABLED,
                         bd = 0)
                 textArea.place(x = 10, y = 10, anchor = NW)
+                textArea.bind("<KeyPress>", lambda x : "break")
                 father.textArea = textArea
                 # 右侧选择聊天对象
-                Label(f, text = "双击选择发送对象:", bg = "#EEEEEE").place(x = 460,
-                        y = 10, anchor = NW)
-                listbox = Listbox(f, width = 13, height = 15, bg = '#FFFFFF')
+                Label(f, text = "双击选择发送对象:", bg = "#EEEEEE").place(
+                        x = 460, y = 10, anchor = NW)
+                listbox = Listbox(f, width = 13, height = 10, bg = '#FFFFFF')
                 listbox.place(x = 460, y = 35, anchor = NW)
                 father.listbox = listbox
                 bt_refresh = Button(f, text = "刷新列表", bd = 0,
                         command = lambda : self.refresh(father.socket))
-                bt_refresh.place(x = 515, y = 320, anchor = CENTER)
+                bt_refresh.place(x = 515, y = 300, anchor = CENTER)
+                # 修改组播地址
+                bt_changeAddr = Button(f, text = "组播地址",
+                        command = self.changeAddr)
+                bt_changeAddr.place(x = 515, y = 320, anchor = CENTER)
                 # 下方内容输入
-                lb_toName = Label(f, text = "Global", bg = '#FFFFFF', width = 8)
+                lb_toName = Label(f, text = "群聊", bg = '#FFFFFF', width = 8)
                 lb_toName.place(x = 12, y = 360)
                 listbox.bind('<Double-Button-1>',
                         lambda x : self.changeSendTo(listbox, lb_toName))
                 self.lb_toName = lb_toName
                 et_input = Entry(f, width = 37)
                 et_input.place(x = 90, y = 358)
+                et_input.bind('<Key-Return>',
+                                lambda x : self.send(father.socket,
+                            lb_toName, et_input))
                 self.et_input = et_input
                 # 发送按钮
                 bt_send = Button(f, text = "发  送",
@@ -263,17 +350,29 @@ class Client():
                             lb_toName, et_input))
                 bt_send.place(x = 515, y = 370, anchor = CENTER)
 
+                # 刷新列表
+                self.refresh(father.socket)
+
                 tk.mainloop()
 
-                father.listenThread.stop()
-                father.socket.close()
+                father.socket.shutdown(2)
+                print 'Socket 断开'
+                father.broadListenThread.stop()
+                father.sSocket.sendto("", (MYGROUP, MYPORT)) # fake send
+                #father.bSocket.shutdown(1)
+                print 'BSocket 断开'
 
         def __main__(self):
             # 开启监听线程
-            print '开始监听'
             listenThread = self.ListenThread(self.socket, self)
             listenThread.start()
             self.listenThread = listenThread
+
+            # 组播侦听线程
+            #print '开始监听'
+            #broadListenThread = self.BroadListenThread(self)
+            #broadListenThread.start()
+            #self.broadListenThread = broadListenThread
 
             # 建立窗口
             window = self.Window(self)
@@ -286,10 +385,19 @@ class Client():
         login.__main__()
 
 if __name__ == '__main__':
-    HOST = 'localhost'
+    global HOST
+    global PORT
+    global BUFSIZ
+    global ADDR
+    global MYPORT
+    global SENDERPORT
+    global MYGROUP
+
+    HOST = '0.0.0.0'
     PORT = 8945
     BUFSIZ = 1024
     ADDR = (HOST, PORT)
+    MYTTL = 255
 
     client = Client()
     client.__main__()
