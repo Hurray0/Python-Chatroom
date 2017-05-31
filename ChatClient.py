@@ -15,6 +15,11 @@ import struct
 reload(sys)
 sys.setdefaultencoding('utf8')
 
+class R():
+    SENDERPORT = 1501
+    MYPORT = 1234
+    MYGROUP = '224.1.1.1'
+
 class Client():
     def __init__(self):
         self.isConnect = False
@@ -83,7 +88,7 @@ class Client():
         def window(self):
             """登录窗口GUI"""
             tk = Tk()
-            tk.geometry('250x200')
+            tk.geometry('250x150')
             tk.title('登录界面')
             frame = Frame(tk)
             frame.pack(expand = YES, fill = BOTH)
@@ -197,33 +202,30 @@ class Client():
                     if self.father.rSocket:
                         # 停止之前的地址
                         self.father.broadListenThread.stop()
-                        self.father.sSocket.sendto("", (MYGROUP, MYPORT)) # fake send
+                        self.father.sSocket.sendto("", (R.MYGROUP, R.MYPORT)) # fake send
                         print '停止之前的地址'
 
                     try:
                         # 发送socket
-                        global MYGROUP
-                        MYGROUP = entry1.get()
-                        global MYPORT
-                        MYPORT = int(entry2.get())
-                        global SENDERPORT
-                        SENDERPORT = int(entry3.get())
+                        R.MYGROUP = entry1.get()
+                        R.MYPORT = int(entry2.get())
+                        R.SENDERPORT = int(entry3.get())
                         s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-                        s.bind((HOST, SENDERPORT))
+                        s.bind((HOST, R.SENDERPORT))
                         ttl_bin = struct.pack('@i', MYTTL)
                         s.setsockopt(IPPROTO_IP, IP_MULTICAST_TTL, ttl_bin)
                         status = s.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP,
-                                inet_aton(MYGROUP) +
+                                inet_aton(R.MYGROUP) +
                                 inet_aton(HOST))#加入到组播组
                         self.father.sSocket = s
 
                         # 监听socket
                         so = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
                         so.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-                        so.bind((HOST, MYPORT))
+                        so.bind((HOST, R.MYPORT))
                         status = so.setsockopt(IPPROTO_IP,
                                 IP_ADD_MEMBERSHIP,
-                                inet_aton(MYGROUP) +
+                                inet_aton(R.MYGROUP) +
                                 inet_aton(HOST))
                         so.setblocking(0)
                         self.father.rSocket = so
@@ -238,22 +240,33 @@ class Client():
                         self.father.broadListenThread = broadListenThread
                         tk.destroy()
 
+                def isset(v):
+                    try:
+                        type(eval(v))
+                    except:
+                        return False
+                    else:
+                        return True
+
                 """修改组播地址"""
                 tk = Tk()
-                tk.geometry('300x150')
-                tk.title('修改组播地址')
+                tk.geometry('270x120')
+                tk.title('请修改组播设置')
                 Label(tk, text = "组播地址: ").grid(row = 0, column = 0)
                 Label(tk, text = "监听端口: ").grid(row = 1, column = 0)
                 Label(tk, text = "本地端口: ").grid(row = 2, column = 0)
                 entry1 = Entry(tk)
                 entry1.grid(row = 0, column = 1)
+                entry1.insert(END, R.MYGROUP)
                 entry2 = Entry(tk)
                 entry2.grid(row = 1, column = 1)
+                entry2.insert(END, R.MYPORT)
                 entry3 = Entry(tk)
                 entry3.grid(row = 2, column = 1)
+                entry3.insert(END, R.SENDERPORT)
                 bt = Button(tk, text = "确定",
                         command = lambda : setAddr(entry1, entry2, entry3,
-                            self, tk)).grid(row = 3, column = 1)
+                            self, tk)).grid(row = 3, column = 0, columnspan = 2)
 
                 tk.mainloop()
 
@@ -264,8 +277,8 @@ class Client():
                 else:
                     data = {'type': 'broadChat', 'msg': msg, 'from': username}
                     jData = json.dumps(data)
-                    print (MYGROUP, MYPORT)
-                    sSocket.sendto(jData, (MYGROUP, MYPORT))
+                    print (R.MYGROUP, R.MYPORT)
+                    sSocket.sendto(jData, (R.MYGROUP, R.MYPORT))
                     print '__sendBroad__' + jData
 
                     # 清空输入框
@@ -319,19 +332,23 @@ class Client():
                 textArea.place(x = 10, y = 10, anchor = NW)
                 textArea.bind("<KeyPress>", lambda x : "break")
                 father.textArea = textArea
+                textArea.focus_set()
                 # 右侧选择聊天对象
                 Label(f, text = "双击选择发送对象:", bg = "#EEEEEE").place(
                         x = 460, y = 10, anchor = NW)
-                listbox = Listbox(f, width = 13, height = 10, bg = '#FFFFFF')
+                listbox = Listbox(f, width = 13, height = 13, bg = '#FFFFFF')
                 listbox.place(x = 460, y = 35, anchor = NW)
                 father.listbox = listbox
                 bt_refresh = Button(f, text = "刷新列表", bd = 0,
                         command = lambda : self.refresh(father.socket))
-                bt_refresh.place(x = 515, y = 300, anchor = CENTER)
+                bt_refresh.place(x = 515, y = 290, anchor = CENTER)
                 # 修改组播地址
                 bt_changeAddr = Button(f, text = "组播地址",
                         command = self.changeAddr)
-                bt_changeAddr.place(x = 515, y = 320, anchor = CENTER)
+                bt_changeAddr.place(x = 515, y = 330, anchor = CENTER)
+                bt_clear = Button(f, text = "清屏",
+                        command = lambda : textArea.delete(0.0, END))
+                bt_clear.place(x = 560, y = 372, anchor = CENTER)
                 # 下方内容输入
                 lb_toName = Label(f, text = "群聊", bg = '#FFFFFF', width = 8)
                 lb_toName.place(x = 12, y = 360)
@@ -345,10 +362,10 @@ class Client():
                             lb_toName, et_input))
                 self.et_input = et_input
                 # 发送按钮
-                bt_send = Button(f, text = "发  送",
+                bt_send = Button(f, text = "ENTER",
                         command = lambda : self.send(father.socket,
                             lb_toName, et_input))
-                bt_send.place(x = 515, y = 370, anchor = CENTER)
+                bt_send.place(x = 480, y = 371, anchor = CENTER)
 
                 # 刷新列表
                 self.refresh(father.socket)
@@ -357,10 +374,12 @@ class Client():
 
                 father.socket.shutdown(2)
                 print 'Socket 断开'
-                father.broadListenThread.stop()
-                father.sSocket.sendto("", (MYGROUP, MYPORT)) # fake send
-                #father.bSocket.shutdown(1)
-                print 'BSocket 断开'
+                try:
+                    father.broadListenThread.stop()
+                    father.sSocket.sendto("", (R.MYGROUP, R.MYPORT)) # fake send
+                except:
+                    pass
+                print 'rSocket 断开'
 
         def __main__(self):
             # 开启监听线程
@@ -389,9 +408,6 @@ if __name__ == '__main__':
     global PORT
     global BUFSIZ
     global ADDR
-    global MYPORT
-    global SENDERPORT
-    global MYGROUP
 
     HOST = '0.0.0.0'
     PORT = 8945
