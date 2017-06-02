@@ -102,10 +102,6 @@ class Handle():
         userList = [user for user in Handle.usernames]
         self.sendSocketToUsers(userList, data)
 
-    def broadChat(self, data):
-        """组播"""
-        pass # 组播是客户端对多客户端的模式，不用服务器处理
-
     def logout(self, data):
         """登出"""
         print "用户"+ Handle.usernames[self.user] +"登出"
@@ -120,7 +116,6 @@ class Handle():
                 "list": self.list,
                 "singleChat": self.singleChat,
                 "groupChat": self.groupChat,
-                "broadChat": self.broadChat,
                 "logout": self.logout
                 }
         try:
